@@ -420,127 +420,155 @@ def process_files(file_items, chunk_size, overlap):
 
 
 # -----------------------------
-# UI
+# Modern Streamlit UI
 # -----------------------------
-st.title("📄 AI Document Assistant")
-st.caption(
-    "Upload documents or load public Google Drive files, then ask questions using hybrid semantic + keyword search."
-)
+CSS = """
+<style>
+    .stApp { background: #f7f8fc; }
+    .block-container { max-width: 1180px; padding-top: 2rem; padding-bottom: 4rem; }
+    header[data-testid="stHeader"] { background: transparent; }
+    .hero {
+        padding: 28px 32px; border-radius: 24px; margin-bottom: 22px;
+        background: linear-gradient(135deg, #111827 0%, #263b72 100%);
+        color: white; box-shadow: 0 12px 35px rgba(17,24,39,.16);
+    }
+    .hero h1 { margin: 0; font-size: 2.25rem; letter-spacing: -.04em; }
+    .hero p { margin: 8px 0 0; color: #dbe4ff; font-size: 1rem; }
+    .card { background: white; border: 1px solid #e8eaf1; border-radius: 18px; padding: 20px; box-shadow: 0 6px 22px rgba(31,41,55,.06); margin-bottom: 18px; }
+    .section-title { font-size: 1.15rem; font-weight: 700; color: #111827; margin-bottom: 5px; }
+    .section-subtitle { color: #6b7280; font-size: .9rem; margin-bottom: 15px; }
+    .stat { background: #f8f9fc; border: 1px solid #eceef4; border-radius: 14px; padding: 15px; text-align: center; }
+    .stat-number { font-size: 1.45rem; font-weight: 750; color: #111827; }
+    .stat-label { color: #6b7280; font-size: .78rem; margin-top: 3px; }
+    .source-card { background: #fff; border: 1px solid #e5e7eb; border-radius: 16px; padding: 16px; margin: 10px 0; }
+    .source-head { display:flex; justify-content:space-between; gap:12px; align-items:center; margin-bottom:10px; }
+    .source-name { font-weight: 700; color:#111827; }
+    .source-meta { color:#6b7280; font-size:.8rem; }
+    .score { background:#eef2ff; color:#3730a3; padding:4px 8px; border-radius:999px; font-size:.75rem; font-weight:700; white-space:nowrap; }
+    .chat-label { font-size:.78rem; font-weight:700; color:#6b7280; text-transform:uppercase; letter-spacing:.08em; margin: 5px 0 8px; }
+    div[data-testid="stFileUploader"] { border-radius: 16px; }
+    div[data-testid="stFileUploaderDropzone"] { border: 1.5px dashed #b8c0d4; border-radius: 16px; background:#fafbff; padding: 18px; }
+    .stButton > button { border-radius: 12px; font-weight: 650; min-height: 42px; }
+    div[data-testid="stMetric"] { background:#f8f9fc; border:1px solid #eceef4; padding:12px; border-radius:14px; }
+    .stChatMessage { border-radius: 16px; }
+    footer { visibility: hidden; }
+</style>
+"""
+st.markdown(CSS, unsafe_allow_html=True)
+
+st.markdown("""
+<div class="hero">
+  <h1>📄 AI Document Assistant</h1>
+  <p>Ask questions across your documents with semantic search, keyword matching, and grounded AI answers.</p>
+</div>
+""", unsafe_allow_html=True)
 
 with st.sidebar:
-    st.header("Settings")
+    st.markdown("## ⚙️ Workspace")
+    st.caption("Tune retrieval without changing the document pipeline.")
     chunk_size = st.slider("Chunk size", 300, 1500, DEFAULT_CHUNK_SIZE, 50)
     overlap = st.slider("Chunk overlap", 0, 300, DEFAULT_OVERLAP, 20)
-    top_k = st.slider("Retrieved chunks", 2, 10, DEFAULT_TOP_K)
+    top_k = st.slider("Sources per answer", 2, 10, DEFAULT_TOP_K)
+    st.divider()
+    if st.session_state.documents_ready:
+        st.success("● Knowledge base ready")
+        st.caption(f"{len(st.session_state.processed_files)} document(s) • {len(st.session_state.chunks)} chunks")
+    else:
+        st.info("Upload documents to create your knowledge base.")
 
-    if overlap >= chunk_size:
-        st.warning("Chunk overlap must be smaller than chunk size.")
+st.markdown('<div class="card"><div class="section-title">1. Add documents</div><div class="section-subtitle">Upload files or connect a public/shared Google Drive source.</div>', unsafe_allow_html=True)
 
-    st.info(
-        "Embeddings are created once when documents are processed and reused for later questions."
-    )
-
-st.subheader("1. Local documents")
 uploaded_files = st.file_uploader(
-    "Upload PDF, DOCX, TXT or MD files",
+    "Drop PDF, DOCX, TXT or Markdown files here",
     type=["pdf", "docx", "txt", "md"],
     accept_multiple_files=True,
+    help="Supported: PDF, DOCX, TXT and MD",
 )
 
-st.subheader("2. Google Drive")
 drive_url = st.text_input(
-    "Paste a public/shared Google Drive file or folder link",
-    placeholder="https://drive.google.com/...",
+    "Google Drive link",
+    placeholder="Paste a public/shared Drive file or folder link…",
+    label_visibility="visible",
 )
+st.markdown('</div>', unsafe_allow_html=True)
 
-if st.button("🔄 Process / Rebuild Document Index", type="primary"):
+col1, col2 = st.columns([1, 3])
+with col1:
+    process_clicked = st.button("✨ Process documents", type="primary", use_container_width=True)
+with col2:
+    if uploaded_files:
+        st.caption(f"{len(uploaded_files)} local file(s) selected")
+
+if process_clicked:
     if overlap >= chunk_size:
-        st.error("Please make the chunk overlap smaller than the chunk size.")
+        st.error("Chunk overlap must be smaller than chunk size.")
     else:
-        file_items = []
-
-        for uploaded in uploaded_files or []:
-            file_items.append((uploaded.name, uploaded.getvalue()))
-
+        file_items = [(uploaded.name, uploaded.getvalue()) for uploaded in (uploaded_files or [])]
         if drive_url.strip():
-            with st.spinner("Loading Google Drive files..."):
+            with st.spinner("Loading Google Drive files…"):
                 try:
-                    drive_items = download_from_google_drive(drive_url.strip())
-                    file_items.extend(drive_items)
+                    file_items.extend(download_from_google_drive(drive_url.strip()))
                 except Exception as error:
                     st.error(f"Google Drive error: {error}")
-
         if not file_items:
-            st.warning("Please upload a document or provide a Google Drive link.")
+            st.warning("Add at least one document or a Google Drive link.")
         else:
-            with st.spinner("Extracting text, chunking and creating embeddings..."):
+            with st.spinner("Building your document knowledge base…"):
                 try:
                     process_files(file_items, chunk_size, overlap)
-                    st.success(
-                        f"Processed {len(st.session_state.processed_files)} document(s) "
-                        f"and created {len(st.session_state.chunks)} chunks."
-                    )
+                    st.success(f"Knowledge base ready — {len(st.session_state.chunks)} chunks created.")
                 except Exception as error:
                     st.error(f"Processing failed: {error}")
 
-# Document information
 if st.session_state.documents_ready:
-    st.subheader("Document information")
-
-    info_columns = st.columns(3)
-    info_columns[0].metric("Documents", len(st.session_state.processed_files))
-    info_columns[1].metric("Chunks", len(st.session_state.chunks))
-    info_columns[2].metric(
-        "Embedding size",
-        st.session_state.embeddings.shape[1] if st.session_state.embeddings is not None else 0,
-    )
-
+    st.markdown('<div class="card"><div class="section-title">Knowledge base</div><div class="section-subtitle">Your processed documents and reusable vector index.</div>', unsafe_allow_html=True)
+    c1, c2, c3 = st.columns(3)
+    stats = [
+        (c1, len(st.session_state.processed_files), "Documents"),
+        (c2, len(st.session_state.chunks), "Text chunks"),
+        (c3, st.session_state.embeddings.shape[1] if st.session_state.embeddings is not None else 0, "Embedding dimensions"),
+    ]
+    for col, value, label in stats:
+        with col:
+            st.markdown(f'<div class="stat"><div class="stat-number">{value}</div><div class="stat-label">{label}</div></div>', unsafe_allow_html=True)
+    st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
     for filename in st.session_state.processed_files:
-        st.write(f"• {filename}")
+        st.markdown(f"📎 **{filename}**")
+    st.markdown('</div>', unsafe_allow_html=True)
 
-    st.divider()
+    st.markdown('<div class="card"><div class="section-title">2. Ask your documents</div><div class="section-subtitle">Answers are grounded only in the retrieved document context.</div>', unsafe_allow_html=True)
+    question = st.chat_input("Ask a question about your documents…")
+    st.markdown('</div>', unsafe_allow_html=True)
 
-    st.subheader("3. Ask your documents")
-    question = st.text_input(
-        "Question",
-        placeholder="What is the main idea of the document?",
-    )
-
-    if st.button("Ask", type="primary", disabled=not question.strip()):
-        with st.spinner("Searching documents..."):
+    if question:
+        with st.chat_message("user", avatar="👤"):
+            st.write(question)
+        with st.spinner("Searching your documents…"):
             retrieved = hybrid_search(question, top_k=top_k)
-
         if not retrieved:
-            st.warning("No relevant document chunks were found.")
+            with st.chat_message("assistant", avatar="🤖"):
+                st.warning("No relevant document chunks were found.")
         else:
-            with st.spinner("Generating answer..."):
+            with st.spinner("Generating a grounded answer…"):
                 try:
                     answer, model_name = answer_question(question, retrieved)
-                    st.markdown("### Answer")
-                    st.write(answer)
-                    st.caption(f"Groq model: {model_name}")
+                    with st.chat_message("assistant", avatar="🤖"):
+                        st.write(answer)
+                        st.caption(f"Generated from retrieved context • {model_name}")
                 except Exception as error:
                     st.error(f"Groq error: {error}")
                     answer = None
 
             if answer:
-                st.markdown("### Retrieved sources")
-
+                st.markdown('<div class="card"><div class="section-title">🔎 Retrieved sources</div><div class="section-subtitle">Evidence used to generate this answer.</div>', unsafe_allow_html=True)
                 for number, source in enumerate(retrieved, start=1):
-                    page_label = (
-                        f"Page {source['page']}"
-                        if source["page"] is not None
-                        else "Page not available"
-                    )
-
-                    with st.expander(
-                        f"Source {number}: {source['filename']} — {page_label}"
-                    ):
-                        st.write(source["text"])
-                        st.caption(
-                            f"Hybrid: {source['hybrid_score']:.3f} | "
-                            f"Semantic: {source['semantic_score']:.3f} | "
-                            f"Keyword: {source['keyword_score']:.3f}"
+                    page_label = f"Page {source['page']}" if source["page"] is not None else "Page unavailable"
+                    with st.expander(f"Source {number}  ·  {source['filename']}  ·  {page_label}"):
+                        st.markdown(
+                            f'<div class="source-card"><div class="source-head"><div><div class="source-name">📄 {source["filename"]}</div><div class="source-meta">{page_label}</div></div><div class="score">Relevance {source["hybrid_score"]:.3f}</div></div><div>{source["text"]}</div></div>',
+                            unsafe_allow_html=True,
                         )
+                        st.caption(f"Semantic {source['semantic_score']:.3f}  •  Keyword {source['keyword_score']:.3f}")
+                st.markdown('</div>', unsafe_allow_html=True)
 else:
-    st.info("Upload documents or load a Google Drive link, then click Process / Rebuild Document Index.")
+    st.markdown('<div class="card" style="text-align:center; padding:38px;"><div style="font-size:2rem">💬</div><div class="section-title">Your document chat will appear here</div><div class="section-subtitle">Upload documents above and process them to start asking questions.</div></div>', unsafe_allow_html=True)
